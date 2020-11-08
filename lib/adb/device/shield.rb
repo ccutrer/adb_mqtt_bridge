@@ -6,7 +6,8 @@ module ADB
       
       def update
         super
-        @wakefulness = system("dumpsys power | grep mWakefulness=").strip.split("=").last.downcase.to_sym
+        update_attribute(:wakefulness,
+          system("dumpsys power | grep mWakefulness=").strip.split("=").last.downcase.to_sym)
       end
 
       def wake_up

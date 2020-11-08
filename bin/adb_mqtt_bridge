@@ -90,6 +90,13 @@ class MQTTBridge
 
       publish_adb(adb)
 
+      Thread.new do
+        loop do
+          adb.update
+          sleep 1
+        end
+      end
+
       publish("$nodes", (["bridge"] + @adbs.keys.sort).join(","))
       publish("$state", "ready")
       true
@@ -102,7 +109,7 @@ class MQTTBridge
 
   def update_attribute(adb, attr, value)
     value = value.join(",") if value.is_a?(Array)
-    publish("#{adb.serialno}/#{attr.gsub('_', '-')}", value)
+    publish("#{adb.serialno}/#{attr.to_s.gsub('_', '-')}", value)
   end
 
   def subscribe(topic)

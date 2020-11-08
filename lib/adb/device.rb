@@ -63,8 +63,14 @@ module ADB
       playback_state = system("dumpsys media_session | grep state=PlaybackState")
       playback_state = playback_state.match(/^      state=PlaybackState {(.+)}/)[1]
       playback_state = playback_state.split(", ").map { |kv| kv.split("=", 2) }.to_h
-      update_attribute(:playback_state, PLAYBACK_STATES[playback_state['state'].to_i])
-      update_attribute(:playback_position, playback_state['position'].to_f / 1000)
+      state = PLAYBACK_STATES[playback_state['state'].to_i]
+      update_attribute(:playback_state, state)
+      position = playback_state['position'].to_f / 1000
+      if state == :playing
+        now = system("cat /proc/uptime").to_f
+        position += now - playback_state['updated'].to_i / 1000.0
+      end
+      update_attribute(:playback_position, position)
       update_attribute(:playback_speed, playback_state['speed'].to_f)
       actions = []
       action_flags = playback_state['actions'].to_i
@@ -141,7 +147,7 @@ module ADB
     def update_attribute(attribute, value)
       unless instance_variable_get(:"@#{attribute}") == value
         instance_variable_set(:"@#{attribute}", value)
-        cb&.[](self, attribute, value)
+        @cb&.[](self, attribute, value)
       end
     end
   end
