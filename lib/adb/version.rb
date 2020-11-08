@@ -1,0 +1,3 @@
+module ADB
+  VERSION = "1.0.0"
+end

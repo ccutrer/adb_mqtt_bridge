@@ -1,0 +1,1 @@
+require 'adb/device'

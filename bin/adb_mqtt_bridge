@@ -1,0 +1,187 @@
+#!/usr/bin/env ruby
+
+require 'adb'
+require 'mqtt'
+
+class MQTTBridge
+  def initialize(mqtt_uri)
+    @base_topic = "homie/adb"
+    @mqtt = MQTT::Client.new(mqtt_uri)
+    @mqtt.set_will("#{@base_topic}/$state", "lost", true)
+    @mqtt.connect
+
+    @adbs = {}
+    @discovery = 300
+
+    publish_basic_attributes
+    publish("$nodes", "bridge")
+
+    start_discovery_thread
+
+    @mqtt.get do |topic, value|
+      puts "got #{value.inspect} at #{topic}"
+      topic = topic[(@base_topic.length + 1)..-1]
+
+      if topic =~ %r{^bridge/discovery(/set)?$}
+        if $1.nil?
+          unsubscribe("bridge/discovery")
+          next if @got_discovery
+          @got_discovery = true
+        end
+        next unless value =~ /^\d+$/
+
+        old_discovery = @discovery
+        discovery = value.to_i
+        next if discovery > 86400
+        @discovery = discovery
+
+        if @discovery != old_discovery
+          publish("bridge/discovery", @discovery)
+        end
+
+        if @discovery < old_discovery || old_discovery == 0
+          @discovery_thread.kill
+          start_discovery_thread
+        end
+        next
+      end
+
+      %r{([0-9A-Fa-f]+)/(keyevent|wakefulness)/set$} =~ topic
+
+      adb = @adbs[$1]
+      unless adb
+        @discovery_object.discover
+        next
+      end
+
+      function = $2
+      if function == 'keyevent'
+        adb.keyevent(value)
+      elsif function == 'wakefulness' && adb.respond_to?(:wakefulness)
+        if value == 'awake'
+          adb.wake_up
+        elsif value == 'asleep'
+          adb.sleep
+        end
+      end
+    end
+  end
+
+  def start_discovery_thread
+    @discovery_thread = Thread.new do
+      discover
+      loop do
+        break if @discovery == 0
+        sleep(@discovery)
+        discover
+      end
+    end
+  end
+
+  def discover
+    ADB::Device.devices.each do |adb_serial|
+      # remove ADBs that are gone
+      known_adb = @adbs.find { |(serialno, adb)| adb.adb_serial == adb_serial }
+      next if known_adb
+
+      publish("$state", "init")
+      adb = ADB::Device.create(adb_serial, method(:update_attribute))
+      @adbs[adb.serialno] = adb
+
+      publish_adb(adb)
+
+      publish("$nodes", (["bridge"] + @adbs.keys.sort).join(","))
+      publish("$state", "ready")
+      true
+    end
+  end
+
+  def publish(topic, value)
+    @mqtt.publish("#{@base_topic}/#{topic}", value, true, 1)
+  end
+
+  def update_attribute(adb, attr, value)
+    value = value.join(",") if value.is_a?(Array)
+    publish("#{adb.serialno}/#{attr.gsub('_', '-')}", value)
+  end
+
+  def subscribe(topic)
+    @mqtt.subscribe("#{@base_topic}/#{topic}")
+  end
+
+  def unsubscribe(topic)
+    @mqtt.unsubscribe("#{@base_topic}/#{topic}")
+  end
+
+  def publish_basic_attributes
+    publish("$homie", "v4.0.0")
+    publish("$name", "ADB")
+    publish("$state", "init")
+
+    publish("bridge/$name", "Bridge")
+    publish("bridge/$type", "Bridge")
+    publish("bridge/$properties", "discover")
+
+    publish("bridge/discovery/$name", "Auto-Discovery Interval")
+    publish("bridge/discovery/$datatype", "integer")
+    publish("bridge/discovery/$settable", "true")
+    publish("bridge/discovery/$format", "0:86400")
+    publish("bridge/discovery/$unit", "s")
+    subscribe("bridge/discovery")
+    subscribe("bridge/discovery/set")
+
+    subscribe("+/keyevent/set")
+    subscribe("+/wakefulness/set")
+  end
+
+  def publish_adb(adb)
+    publish("#{adb.serialno}/$name", adb.device_name)
+    publish("#{adb.serialno}/$type", adb.class.name.split('::').last)
+    properties = []
+
+    properties << 'keyevent'
+    publish("#{adb.serialno}/keyevent/$name", "Send a key event")
+    publish("#{adb.serialno}/keyevent/$datatype", "string")
+    publish("#{adb.serialno}/keyevent/$retained", "false")
+    publish("#{adb.serialno}/keyevent/$settable", "true")
+    
+    properties << 'foreground-app'
+    publish("#{adb.serialno}/foreground-app/$name", "Foreground App")
+    publish("#{adb.serialno}/foreground-app/$datatype", "string")
+    
+    properties << 'current-window'
+    publish("#{adb.serialno}/current-window/$name", "Current window of the foreground app")
+    publish("#{adb.serialno}/current-window/$datatype", "string")
+
+    properties << 'playback-state'
+    publish("#{adb.serialno}/playback-state/$name", "Current playback state")
+    publish("#{adb.serialno}/playback-state/$datatype", "enum")
+    publish("#{adb.serialno}/playback-state/$format", ADB::Device::PLAYBACK_STATES.values.join(","))
+
+    properties << 'playback-position'
+    publish("#{adb.serialno}/playback-position/$name", "Current playback position")
+    publish("#{adb.serialno}/playback-position/$datatype", "float")
+    publish("#{adb.serialno}/playback-position/$unit", "s")
+
+    properties << 'playback-speed'
+    publish("#{adb.serialno}/playback-speed/$name", "Current playback speed")
+    publish("#{adb.serialno}/playback-speed/$datatype", "float")
+
+    properties << 'playback-actions'
+    publish("#{adb.serialno}/playback-actions/$name", "Valid actions for current media session")
+    publish("#{adb.serialno}/playback-actions/$datatype", "string")
+
+    if adb.respond_to?(:wakefulness)
+      properties << 'wakefulness'
+      publish("#{adb.serialno}/wakefulness/$name", "Wakefulness")
+      publish("#{adb.serialno}/wakefulness/$datatype", "enum")
+      publish("#{adb.serialno}/wakefulness/$settable", "true")
+      publish("#{adb.serialno}/wakefulness/$format", "awake,asleep,dreaming")
+    end
+
+    publish("#{adb.serialno}/$properties", properties.join(","))
+  end
+end
+
+mqtt_uri = ARGV[0]
+MQTTBridge.new(mqtt_uri)
