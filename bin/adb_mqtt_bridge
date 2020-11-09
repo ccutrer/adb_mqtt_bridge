@@ -46,7 +46,7 @@ class MQTTBridge
         next
       end
 
-      %r{([0-9A-Fa-f]+)/(keyevent|wakefulness)/set$} =~ topic
+      %r{([0-9A-Fa-f]+)/(keyevent|wakefulness|awake)/set$} =~ topic
 
       adb = @adbs[$1]
       unless adb
@@ -63,6 +63,8 @@ class MQTTBridge
         elsif value == 'asleep'
           adb.sleep
         end
+      elsif function == 'awake'  && adb.respond_to?(:wakefulness) && %w{true false}.include?(value)
+        value == 'true' ? adb.wake_up : adb.sleep
       end
     end
   end
@@ -109,7 +111,10 @@ class MQTTBridge
 
   def update_attribute(adb, attr, value)
     value = value.join(",") if value.is_a?(Array)
-    publish("#{adb.serialno}/#{attr.to_s.gsub('_', '-')}", value)
+    publish("#{adb.serialno}/#{attr.to_s.gsub('_', '-')}", value.to_s)
+    if attr == :wakefulness
+      publish("#{adb.serialno}/awake", (value != :asleep).to_s)
+    end
   end
 
   def subscribe(topic)
@@ -139,6 +144,7 @@ class MQTTBridge
 
     subscribe("+/keyevent/set")
     subscribe("+/wakefulness/set")
+    subscribe("+/awake/set")
   end
 
   def publish_adb(adb)
@@ -178,12 +184,37 @@ class MQTTBridge
     publish("#{adb.serialno}/playback-actions/$name", "Valid actions for current media session")
     publish("#{adb.serialno}/playback-actions/$datatype", "string")
 
+    properties << 'playback-title'
+    publish("#{adb.serialno}/playback-title/$name", "Current media item title")
+    publish("#{adb.serialno}/playback-title/$datatype", "string")
+
+    properties << 'playback-album'
+    publish("#{adb.serialno}/playback-album/$name", "Current song album")
+    publish("#{adb.serialno}/playback-album/$datatype", "string")
+
+    properties << 'playback-artist'
+    publish("#{adb.serialno}/playback-artist/$name", "Current media item artist")
+    publish("#{adb.serialno}/playback-artist/$datatype", "string")
+
+    properties << 'playback-track'
+    publish("#{adb.serialno}/playback-track/$name", "Current song track")
+    publish("#{adb.serialno}/playback-track/$datatype", "integer")
+
+    properties << 'playback-track-count'
+    publish("#{adb.serialno}/playback-track-count/$name", "Current album's track count")
+    publish("#{adb.serialno}/playback-track-count/$datatype", "integer")
+
     if adb.respond_to?(:wakefulness)
       properties << 'wakefulness'
       publish("#{adb.serialno}/wakefulness/$name", "Wakefulness")
       publish("#{adb.serialno}/wakefulness/$datatype", "enum")
       publish("#{adb.serialno}/wakefulness/$settable", "true")
       publish("#{adb.serialno}/wakefulness/$format", "awake,asleep,dreaming")
+
+      properties << 'awake'
+      publish("#{adb.serialno}/awake/$name", "Awake")
+      publish("#{adb.serialno}/awake/$datatype", "boolean")
+      publish("#{adb.serialno}/awake/$settable", "true")
     end
 
     publish("#{adb.serialno}/$properties", properties.join(","))
