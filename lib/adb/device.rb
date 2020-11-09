@@ -62,6 +62,18 @@ module ADB
       :playback_track,
       :playback_track_count
 
+    EVENT_REGEX = /^(\S+):\s+(\S+)\s+(\S+)\s+(\S+)\s*$/
+    private_constant :EVENT_REGEX
+
+    def getevents
+      @getevent = IO.popen("adb -s #{adb_serial} shell -t -t getevent -ql", "w+")
+      loop do
+        line = @getevent.gets
+        next unless line =~ EVENT_REGEX
+        yield($3, $4) if $2 == 'EV_KEY'
+      end
+    end
+
     def update
       system("dumpsys window windows | grep mCurrentFocus=") =~
         /^  mCurrentFocus=Window{[0-9a-f]+ u0 ([a-zA-Z0-9.]+)\/([a-zA-Z0-9.]+)}\n$/

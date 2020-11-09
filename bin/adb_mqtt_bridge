@@ -99,6 +99,12 @@ class MQTTBridge
         end
       end
 
+      Thread.new do
+        adb.getevents do |key, action|
+          publish("#{adb.serialno}/event", "#{key} #{action}")
+        end
+      end
+
       publish("$nodes", (["bridge"] + @adbs.keys.sort).join(","))
       publish("$state", "ready")
       true
@@ -152,14 +158,23 @@ class MQTTBridge
     publish("#{adb.serialno}/$type", adb.class.name.split('::').last)
     properties = []
 
+    properties << 'event'
+    publish("#{adb.serialno}/event/$name", "Incoming stream of key events")
+    publish("#{adb.serialno}/event/$datatype", "string")
+    publish("#{adb.serialno}/event/$retained", "false")
+
     properties << 'keyevent'
     publish("#{adb.serialno}/keyevent/$name", "Send a key event")
     publish("#{adb.serialno}/keyevent/$datatype", "string")
     publish("#{adb.serialno}/keyevent/$retained", "false")
     publish("#{adb.serialno}/keyevent/$settable", "true")
-    
+
+    properties << 'foreground-app-package'
+    publish("#{adb.serialno}/foreground-app-package/$name", "Foreground App Package")
+    publish("#{adb.serialno}/foreground-app-package/$datatype", "string")
+
     properties << 'foreground-app'
-    publish("#{adb.serialno}/foreground-app/$name", "Foreground App")
+    publish("#{adb.serialno}/foreground-app/$name", "Foreground App Display Name")
     publish("#{adb.serialno}/foreground-app/$datatype", "string")
     
     properties << 'current-window'
