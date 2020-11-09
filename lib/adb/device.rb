@@ -90,13 +90,16 @@ module ADB
       @adb.close
     end
 
+    SENTINEL = "COMMAND COMPLETE"
+
     def system(command)
-      @adb.puts(command)
-      @adb.wait_readable
+      @adb.puts("#{command}; echo #{SENTINEL}")
       result = +''
-      while @adb.ready?
+      loop do
         result.concat(@adb.readpartial(4096))
+        break if result.end_with?("#{SENTINEL}\n")
       end
+      result = result[0..-(SENTINEL.length + 2)]
       result
     end
 
