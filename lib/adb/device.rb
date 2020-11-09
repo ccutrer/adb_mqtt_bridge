@@ -1,4 +1,5 @@
 require 'io/wait'
+require 'shellwords'
 
 module ADB
   class Device
@@ -47,37 +48,90 @@ module ADB
     attr_reader :adb_serial
     attr_reader :serialno,
       :device_name,
+      :foreground_app_package,
       :foreground_app,
       :current_window,
       :playback_state,
       :playback_position,
+      :playback_duration,
       :playback_speed,
-      :playback_actions
+      :playback_actions,
+      :playback_title,
+      :playback_artist,
+      :playback_album,
+      :playback_track,
+      :playback_track_count
 
     def update
       system("dumpsys window windows | grep mCurrentFocus=") =~
         /^  mCurrentFocus=Window{[0-9a-f]+ u0 ([a-zA-Z0-9.]+)\/([a-zA-Z0-9.]+)}\n$/
-      update_attribute(:foreground_app, $1)
+      update_attribute(:foreground_app_package, $1)
       update_attribute(:current_window, $2)
 
-      playback_state = system("dumpsys media_session | grep state=PlaybackState")
-      playback_state = playback_state.match(/^      state=PlaybackState {(.+)}/)[1]
-      playback_state = playback_state.split(", ").map { |kv| kv.split("=", 2) }.to_h
-      state = PLAYBACK_STATES[playback_state['state'].to_i]
-      update_attribute(:playback_state, state)
-      position = playback_state['position'].to_f / 1000
-      if state == :playing
-        now = system("cat /proc/uptime").to_f
-        position += now - playback_state['updated'].to_i / 1000.0
+      if foreground_app_package
+        escaped_package = Shellwords.escape(Regexp.escape(foreground_app_package))
+        info = system("dumpsys bluetooth_manager | grep -A3 #{escaped_package}")
+        playback_state = system("dumpsys media_session | grep -A9 #{escaped_package}").
+          match(/PlaybackState {(.+)}/)&.[](1)
+
+        update_attribute(:foreground_app, info.match(/MediaPlayerInfo #{Regexp.escape(foreground_app_package)} \(as '(.+)'\) Type = /)&.[](1) || '')
+      else
+        update_attribute(:foreground_app, '')
       end
-      update_attribute(:playback_position, position)
-      update_attribute(:playback_speed, playback_state['speed'].to_f)
-      actions = []
-      action_flags = playback_state['actions'].to_i
-      PLAYBACK_ACTIONS.each do |(flag, sym)|
-        actions << sym if (action_flags & flag) == flag
+
+      song = info&.match(/Song: {(.+)}/)&.[](1)
+      if song
+        song = parse_song(song)
+        update_attribute(:playback_duration, song['duration'].to_i / 1000.0)
+        %w{title artist album}.each do |attr|
+          value = song[attr]
+          value = '' if value == 'Not Provided'
+          update_attribute(:"playback_#{attr}", value)
+        end
+        track, track_count = song['trackPosition'].split('/', 2).map(&:to_i)
+        update_attribute(:playback_track, track)
+        update_attribute(:playback_track_count, track_count)
+      else
+        update_attribute(:playback_duration, '')
+        update_attribute(:playback_title, '')
+        update_attribute(:playback_artist, '')
+        update_attribute(:playback_album, '')
+        update_attribute(:playback_track, '')
+        update_attribute(:playback_track_count, '')
       end
-      update_attribute(:playback_actions, actions)
+
+      if playback_state
+        playback_state = playback_state.split(", ").map { |kv| kv.split("=", 2) }.to_h
+        state = PLAYBACK_STATES[playback_state['state'].to_i]
+        position = playback_state['position'].to_f / 1000
+        if state == :playing
+          now = system("cat /proc/uptime").to_f
+          position += now - playback_state['updated'].to_i / 1000.0
+        end
+
+        if playback_duration > 0 && position > playback_duration
+          # wtf? it's _not_ still playing
+          update_attribute(:playback_state, :stopped)
+          update_attribute(:playback_position, playback_duration)
+        else
+          update_attribute(:playback_state, state)
+          update_attribute(:playback_position, position)
+        end
+        update_attribute(:playback_speed, playback_state['speed'].to_f)
+        actions = []
+        action_flags = playback_state['actions'].to_i
+        PLAYBACK_ACTIONS.each do |(flag, sym)|
+          actions << sym if (action_flags & flag) == flag
+        end
+        update_attribute(:playback_actions, actions)
+      else
+        update_attribute(:playback_state, '')
+        update_attribute(:playback_position, '')
+        update_attribute(:playback_speed, '')
+        update_attribute(:playback_actions, [])
+      end
+
+
     end
 
     # see https://developer.android.com/reference/android/view/KeyEvent
@@ -152,6 +206,16 @@ module ADB
         instance_variable_set(:"@#{attribute}", value)
         @cb&.[](self, attribute, value)
       end
+    end
+
+    def parse_song(object)
+      result = {}
+      object.scan(/([A-Za-z]+)=("[^"]+"|[^ ]+)/) do |kv|
+        v = kv.last
+        v = v[1..-2] if v[0] == '"'
+        result[kv.first] = v
+      end
+      result
     end
   end
 end

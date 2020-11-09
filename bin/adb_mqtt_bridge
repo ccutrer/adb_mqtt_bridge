@@ -176,6 +176,11 @@ class MQTTBridge
     publish("#{adb.serialno}/playback-position/$datatype", "float")
     publish("#{adb.serialno}/playback-position/$unit", "s")
 
+    properties << 'playback-duration'
+    publish("#{adb.serialno}/playback-duration/$name", "Total duration of current track")
+    publish("#{adb.serialno}/playback-duration/$datatype", "float")
+    publish("#{adb.serialno}/playback-duration/$unit", "s")
+
     properties << 'playback-speed'
     publish("#{adb.serialno}/playback-speed/$name", "Current playback speed")
     publish("#{adb.serialno}/playback-speed/$datatype", "float")
