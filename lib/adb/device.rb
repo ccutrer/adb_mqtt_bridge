@@ -65,13 +65,19 @@ module ADB
     EVENT_REGEX = /^(\S+):\s+(\S+)\s+(\S+)\s+(\S+)\s*$/
     private_constant :EVENT_REGEX
 
+    def close
+      @adb.close
+    end
+
     def getevents
-      @getevent = IO.popen("adb -s #{adb_serial} shell -t -t getevent -ql", "w+")
+      getevent = IO.popen("adb -s #{adb_serial} shell -t -t getevent -ql", "w+")
       loop do
-        line = @getevent.gets
+        line = getevent.gets
         next unless line =~ EVENT_REGEX
         yield($3, $4) if $2 == 'EV_KEY'
       end
+    ensure
+      getevent.close
     end
 
     def update

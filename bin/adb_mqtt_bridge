@@ -97,6 +97,12 @@ class MQTTBridge
           adb.update
           sleep 1
         end
+      ensure
+        adb.close
+        @adbs.delete(adb)
+        publish("$state", "init")
+        publish("$nodes", (["bridge"] + @adbs.keys.sort).join(","))
+        publish("$state", "ready")
       end
 
       Thread.new do
