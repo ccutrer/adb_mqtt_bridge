@@ -2,6 +2,7 @@
 
 require 'adb'
 require 'mqtt'
+require 'shellwords'
 
 class MQTTBridge
   def initialize(mqtt_uri)
@@ -9,6 +10,7 @@ class MQTTBridge
     @mqtt = MQTT::Client.new(mqtt_uri)
     @mqtt.set_will("#{@base_topic}/$state", "lost", true)
     @mqtt.connect
+    @discovery_mutex = Mutex.new
 
     @adbs = {}
     @discovery = 300
@@ -17,6 +19,7 @@ class MQTTBridge
     publish("$nodes", "bridge")
 
     start_discovery_thread
+    start_reconnect_thread
 
     @mqtt.get do |topic, value|
       puts "got #{value.inspect} at #{topic}"
@@ -80,40 +83,71 @@ class MQTTBridge
     end
   end
 
-  def discover
-    ADB::Device.devices.each do |adb_serial|
-      # remove ADBs that are gone
-      known_adb = @adbs.find { |(serialno, adb)| adb.adb_serial == adb_serial }
-      next if known_adb
-
-      publish("$state", "init")
-      adb = ADB::Device.create(adb_serial, method(:update_attribute))
-      @adbs[adb.serialno] = adb
-
-      publish_adb(adb)
-
-      Thread.new do
-        loop do
-          adb.update
-          sleep 1
+  def start_reconnect_thread
+    @reconnect_thread = Thread.new do
+      ADB::Discovery.discover do |serial, addr|
+        unless @adbs.key?(serial)
+          system("adb connect #{Shellwords.escape(addr)}")
+          discover
         end
-      ensure
-        adb.close
-        @adbs.delete(adb)
+      end
+    end
+  end
+
+  def discover
+    require 'byebug'
+    @discovery_mutex.synchronize do
+      ADB::Device.devices.each do |adb_serial|
+        # remove ADBs that are gone
+        known_adb = @adbs.find { |(serialno, adb)| adb.adb_serial == adb_serial }
+        next if known_adb
+
         publish("$state", "init")
+        adb = nil
+        begin
+          adb = ADB::Device.create(adb_serial, method(:update_attribute))
+        rescue ADB::Device::DeviceNotFound
+          # it's probably not ready yet
+          next
+        end
+
+        if @adbs.key?(adb.serialno)
+          puts "discarding device #{adb.serialno} at #{adb_serial} because we already have it at #{@adbs[adb.serialno].adb_serial}"
+          adb.close
+          next
+        end
+
+        @adbs[adb.serialno] = adb
+
+        publish_adb(adb)
+
+        Thread.new do
+          begin
+            loop do
+              adb.update
+              sleep 1
+            end
+          ensure
+            adb.close
+            @discovery_mutex.synchronize do
+              @adbs.delete(adb.serialno)
+              publish("$state", "init")
+              publish("$nodes", (["bridge"] + @adbs.keys.sort).join(","))
+              publish("$state", "ready")
+            end
+          end
+        end
+
+        Thread.new do
+          adb.getevents do |key, action|
+            publish("#{adb.serialno}/event", "#{key} #{action}")
+          end
+        end
+
         publish("$nodes", (["bridge"] + @adbs.keys.sort).join(","))
         publish("$state", "ready")
+        true
       end
-
-      Thread.new do
-        adb.getevents do |key, action|
-          publish("#{adb.serialno}/event", "#{key} #{action}")
-        end
-      end
-
-      publish("$nodes", (["bridge"] + @adbs.keys.sort).join(","))
-      publish("$state", "ready")
-      true
     end
   end
 

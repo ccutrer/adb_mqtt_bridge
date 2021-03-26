@@ -5,6 +5,9 @@ module ADB
   class Device
     autoload :SHIELD, 'adb/device/shield'
 
+    class DeviceNotFound < StandardError
+    end
+
     class << self
       def devices
         lines = `adb devices -l`.split("\n")
@@ -19,10 +22,12 @@ module ADB
         adb = IO.popen("adb -s #{adb_serial} shell", "w+")
 
         adb.puts("getprop ro.product.name")
-        product_name = adb.gets.strip
+        product_name = adb.gets
+        raise DeviceNotFound if product_name.nil?
+        product_name.strip!
 
         klass = case product_name
-        when 'darcy'; SHIELD
+        when 'darcy', 'sif'; SHIELD
         else; self
         end
 
@@ -66,18 +71,30 @@ module ADB
     private_constant :EVENT_REGEX
 
     def close
-      @adb.close
+      if @getevent
+        Process.kill("TERM", @getevent.pid)
+        @getevent.close
+        @getevent = nil
+      end
+
+      if @adb
+        Process.kill("TERM", @adb.pid)
+        @adb.close
+        @adb = nil
+      end
     end
 
     def getevents
-      getevent = IO.popen("adb -s #{adb_serial} shell -t -t getevent -ql", "w+")
+      @getevent = IO.popen("adb -s #{adb_serial} shell -t -t getevent -ql", "w+")
       loop do
-        line = getevent.gets
+        line = @getevent.gets
+        return if line.nil?
         next unless line =~ EVENT_REGEX
+
         yield($3, $4) if $2 == 'EV_KEY'
       end
     ensure
-      getevent.close
+      close
     end
 
     def update
@@ -156,10 +173,6 @@ module ADB
     def keyevent(key)
       key = "KEYCODE_#{key.upcase}" if key.is_a?(Symbol)
       @adb.puts("input keyevent #{key}")
-    end
-
-    def close
-      @adb.close
     end
 
     SENTINEL = "COMMAND COMPLETE"
