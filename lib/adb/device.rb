@@ -15,23 +15,27 @@ module ADB
 
         # first line is header
         lines.shift
-        lines.map { |l| l.split(" ").first }
+        lines.map do |l|
+          obj = {}
+          fields = l.split(" ")
+          # not fully connected/booted yet
+          next unless fields.include?("device")
+          obj[:adb_serial] = fields.shift
+          fields.each do |f|
+            k, v = f.split(':', 2)
+            obj[k.to_sym] = v
+          end
+          obj
+        end.compact
       end
 
-      def create(adb_serial, cb = nil)
-        adb = IO.popen("adb -s #{adb_serial} shell", "w+")
-
-        adb.puts("getprop ro.product.name")
-        product_name = adb.gets
-        raise DeviceNotFound if product_name.nil?
-        product_name.strip!
-
-        klass = case product_name
+      def create(device_attrs, cb = nil)
+        klass = case device_attrs[:product]
         when 'darcy', 'sif'; SHIELD
         else; self
         end
 
-        klass.new(adb, adb_serial, cb)
+        klass.new(device_attrs, cb)
       end
     end
 
@@ -50,7 +54,7 @@ module ADB
       11 => :skipping_to_queue_item,
     }.freeze
 
-    attr_reader :adb_serial
+    attr_reader :device_attrs
     attr_reader :serialno,
       :device_name,
       :foreground_app_package,
@@ -77,15 +81,15 @@ module ADB
         @getevent = nil
       end
 
-      if @adb
-        Process.kill("TERM", @adb.pid)
-        @adb.close
-        @adb = nil
+      if @shell
+        Process.kill("TERM", @shell.pid)
+        @shell.close
+        @shell = nil
       end
     end
 
     def getevents
-      @getevent = IO.popen("adb -s #{adb_serial} shell -t -t getevent -ql", "w+")
+      @getevent = IO.popen("adb #{@key} shell -t -t getevent -ql", "w+")
       loop do
         line = @getevent.gets
         return if line.nil?
@@ -172,16 +176,16 @@ module ADB
     # see https://developer.android.com/reference/android/view/KeyEvent
     def keyevent(key)
       key = "KEYCODE_#{key.upcase}" if key.is_a?(Symbol)
-      @adb.puts("input keyevent #{key}")
+      @sehll.puts("input keyevent #{key}")
     end
 
     SENTINEL = "COMMAND COMPLETE"
 
     def system(command)
-      @adb.puts("#{command}; echo #{SENTINEL}")
+      @shell.puts("#{command}; echo #{SENTINEL}")
       result = +''
       loop do
-        result.concat(@adb.readpartial(4096))
+        result.concat(@shell.readpartial(4096))
         break if result.end_with?("#{SENTINEL}\n")
       end
       result = result[0..-(SENTINEL.length + 2)]
@@ -212,9 +216,16 @@ module ADB
     }.freeze
     private_constant :PLAYBACK_ACTIONS
 
-    def initialize(adb, adb_serial, cb)
-      @adb = adb
-      @adb_serial = adb_serial
+    def initialize(device_attrs, cb)
+      @key = if device_attrs.key?(:transport_id)
+        "-t #{Shellwords.escape(device_attrs[:transport_id])}"
+      elsif device_attrs.key?(:adb_serial)
+        "-s #{Shellwords.escape(device_attrs[:adb_serial])}"
+      end
+      @device_attrs = device_attrs
+
+      @shell = IO.popen("adb #{@key} shell", "w+")
+
       @cb = cb
 
       @serialno = system("getprop ro.serialno").strip

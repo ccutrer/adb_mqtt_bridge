@@ -4,6 +4,7 @@ PATH
     adb_mqtt_bridge (1.0.0)
       dnssd (~> 3.0)
       mqtt (~> 0.5.0)
+      slop (~> 4.8)
 
 GEM
   remote: https://rubygems.org/
@@ -12,6 +13,7 @@ GEM
     dnssd (3.0.1)
     mqtt (0.5.0)
     rake (13.0.1)
+    slop (4.8.2)
 
 PLATFORMS
   ruby

@@ -15,6 +15,7 @@ Gem::Specification.new do |s|
 
   s.add_dependency 'mqtt', "~> 0.5.0"
   s.add_dependency 'dnssd', "~> 3.0"
+  s.add_dependency 'slop', "~> 4.8"
 
   s.add_development_dependency 'byebug', "~> 9.0"
   s.add_development_dependency 'rake', "~> 13.0"

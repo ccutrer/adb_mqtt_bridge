@@ -2,16 +2,20 @@
 
 require 'adb'
 require 'mqtt'
+require 'set'
 require 'shellwords'
+require 'slop'
 
 class MQTTBridge
-  def initialize(mqtt_uri)
+  def initialize(mqtt_uri, devices: [])
     @base_topic = "homie/adb"
     @mqtt = MQTT::Client.new(mqtt_uri)
     @mqtt.set_will("#{@base_topic}/$state", "lost", true)
     @mqtt.connect
     @discovery_mutex = Mutex.new
+    @explicit_devices = devices
 
+    @ignored_adbs = Set.new
     @adbs = {}
     @discovery = 300
 
@@ -74,10 +78,12 @@ class MQTTBridge
 
   def start_discovery_thread
     @discovery_thread = Thread.new do
+      connect_explicit_devices unless @explicit_devices.empty?
       discover
       loop do
         break if @discovery == 0
         sleep(@discovery)
+        connect_explicit_devices unless @explicit_devices.empty?
         discover
       end
     end
@@ -94,26 +100,39 @@ class MQTTBridge
     end
   end
 
+  def connect_explicit_devices
+    known_devices = ADB::Device.devices.map do |device_attrs|
+      device_attrs[:adb_serial]
+    end
+    @explicit_devices.each do |addr|
+      next if known_devices.any? do |adb_serial|
+        addr == adb_serial || (!addr.include?(':') && "#{addr}:5555" == adb_serial)
+      end
+      system("adb connect #{Shellwords.escape(addr)}")
+    end
+  end
+
   def discover
-    require 'byebug'
     @discovery_mutex.synchronize do
-      ADB::Device.devices.each do |adb_serial|
+      ADB::Device.devices.each do |device_attrs|
         # remove ADBs that are gone
-        known_adb = @adbs.find { |(serialno, adb)| adb.adb_serial == adb_serial }
+        known_adb = @adbs.find { |(_, adb)| adb.device_attrs[:transport_id] == device_attrs[:transport_id] }
         next if known_adb
+        next if @ignored_adbs.include?(device_attrs[:transport_id])
 
         publish("$state", "init")
         adb = nil
         begin
-          adb = ADB::Device.create(adb_serial, method(:update_attribute))
+          adb = ADB::Device.create(device_attrs, method(:update_attribute))
         rescue ADB::Device::DeviceNotFound
           # it's probably not ready yet
           next
         end
 
         if @adbs.key?(adb.serialno)
-          puts "discarding device #{adb.serialno} at #{adb_serial} because we already have it at #{@adbs[adb.serialno].adb_serial}"
+          puts "discarding device #{adb.serialno} at #{device_attrs[:adb_serial]} because we already have it at #{@adbs[adb.serialno].device_attrs[:adb_serial]}"
           adb.close
+          @ignored_adbs << device_attrs[:transport_id]
           next
         end
 
@@ -131,6 +150,7 @@ class MQTTBridge
             adb.close
             @discovery_mutex.synchronize do
               @adbs.delete(adb.serialno)
+              @ignored_adbs = Set.new
               publish("$state", "init")
               publish("$nodes", (["bridge"] + @adbs.keys.sort).join(","))
               publish("$state", "ready")
@@ -145,9 +165,9 @@ class MQTTBridge
         end
 
         publish("$nodes", (["bridge"] + @adbs.keys.sort).join(","))
-        publish("$state", "ready")
         true
       end
+      publish("$state", "ready")
     end
   end
 
@@ -281,5 +301,9 @@ class MQTTBridge
   end
 end
 
-mqtt_uri = ARGV[0]
-MQTTBridge.new(mqtt_uri)
+
+opts = Slop.parse do |o|
+  o.array '-d', '--device', 'explicitly connect to device'
+end
+
+MQTTBridge.new(opts.arguments.first, devices: opts[:device])
