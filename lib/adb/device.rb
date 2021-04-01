@@ -30,6 +30,7 @@ module ADB
       end
 
       def create(device_attrs, cb = nil)
+        puts "connecting to #{device_attrs.inspect}"
         klass = case device_attrs[:product]
         when 'darcy', 'sif'; SHIELD
         else; self
