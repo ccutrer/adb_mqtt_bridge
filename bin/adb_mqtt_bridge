@@ -1,80 +1,63 @@
 #!/usr/bin/env ruby
 
 require 'adb'
-require 'mqtt'
+require 'homie-mqtt'
 require 'set'
 require 'shellwords'
 require 'slop'
 
 class MQTTBridge
-  def initialize(mqtt_uri, devices: [])
-    @base_topic = "homie/adb"
+  def initialize(mqtt_uri, devices: [], id: "adb")
     @mqtt = MQTT::Client.new(mqtt_uri)
-    @mqtt.set_will("#{@base_topic}/$state", "lost", retain: true, qos: 1)
-    @mqtt.connect
+
+    @discovery = 300
+
+    @homie = MQTT::Homie::Device.new(id, "ADB", mqtt: @mqtt, clear_topics: false)
+
+    discovery_topic = "#{@homie.topic}/bridge/discover"
+    @mqtt.subscribe(discovery_topic)
+    @mqtt.unsubscribe(discovery_topic, wait_for_ack: true)
+    while !@mqtt.queue_empty?
+      packet = @mqtt.get
+      next unless packet.topic == discovery_topic
+      next unless packet.payload =~ /^\d+$/
+
+      discover = packet.payload.to_i
+      next if discovery > 86400
+      @discovery = discovery
+    end
+
+    @homie.clear_topics
+
     @discovery_mutex = Mutex.new
     @explicit_devices = devices
 
     @ignored_adbs = Set.new
     @adbs = {}
-    @discovery = 300
-
-    publish_basic_attributes
-    publish("$nodes", "bridge")
 
     start_discovery_thread
     start_reconnect_thread
 
-    @mqtt.get do |packet|
-      topic, value = packet.topic, packet.payload
-      puts "got #{value.inspect} at #{topic}"
-      topic = topic[(@base_topic.length + 1)..-1]
-
-      if topic =~ %r{^bridge/discovery(/set)?$}
-        if $1.nil?
-          unsubscribe("bridge/discovery")
-          next if @got_discovery
-          @got_discovery = true
-        end
-        next unless value =~ /^\d+$/
+    @homie.node("bridge", "Bridge", "Bridge") do |bridge|
+      discovery_property = bridge.property("discovery", "Auto-Discovery Interval", :integer, @discovery, format: 0..86400, unit: 's') do |discovery|
+        next if discovery > 86_400
 
         old_discovery = @discovery
-        discovery = value.to_i
-        next if discovery > 86400
         @discovery = discovery
 
-        if @discovery != old_discovery
-          publish("bridge/discovery", @discovery)
-        end
+        discovery_property.value = discovery
 
         if @discovery < old_discovery || old_discovery == 0
           @discovery_thread.kill
           start_discovery_thread
         end
-        next
-      end
-
-      %r{([0-9A-Fa-f]+)/(keyevent|wakefulness|awake)/set$} =~ topic
-
-      adb = @adbs[$1]
-      unless adb
-        @discovery_object.discover
-        next
-      end
-
-      function = $2
-      if function == 'keyevent'
-        adb.keyevent(value)
-      elsif function == 'wakefulness' && adb.respond_to?(:wakefulness)
-        if value == 'awake'
-          adb.wake_up
-        elsif value == 'asleep'
-          adb.sleep
-        end
-      elsif function == 'awake'  && adb.respond_to?(:wakefulness) && %w{true false}.include?(value)
-        value == 'true' ? adb.wake_up : adb.sleep
       end
     end
+
+    @homie.publish
+
+
+    @homie.join
   end
 
   def start_discovery_thread
@@ -121,7 +104,6 @@ class MQTTBridge
         next if known_adb
         next if @ignored_adbs.include?(device_attrs[:transport_id])
 
-        publish("$state", "init")
         adb = nil
         begin
           adb = ADB::Device.create(device_attrs, method(:update_attribute))
@@ -139,7 +121,7 @@ class MQTTBridge
 
         @adbs[adb.serialno] = adb
 
-        publish_adb(adb)
+        node = publish_adb(adb)
 
         Thread.new do
           begin
@@ -152,153 +134,60 @@ class MQTTBridge
             @discovery_mutex.synchronize do
               @adbs.delete(adb.serialno)
               @ignored_adbs = Set.new
-              publish("$state", "init")
-              publish("$nodes", (["bridge"] + @adbs.keys.sort).join(","))
-              publish("$state", "ready")
+              @homie.remove_node(adb.serialno)
             end
           end
         end
 
         Thread.new do
           adb.getevents do |key, action|
-            publish("#{adb.serialno}/event", "#{key} #{action}")
+            node['event'].value = "#{key} #{action}"
           end
         end
 
-        publish("$nodes", (["bridge"] + @adbs.keys.sort).join(","))
         true
       end
-      publish("$state", "ready")
     end
-  end
-
-  def publish(topic, value)
-    @mqtt.publish("#{@base_topic}/#{topic}", value, retain: true, qos: 1)
   end
 
   def update_attribute(adb, attr, value)
     value = value.join(",") if value.is_a?(Array)
-    publish("#{adb.serialno}/#{attr.to_s.gsub('_', '-')}", value.to_s)
+    prop = @homie[adb.serialno][attr.to_s.gsub('_', '-')].value = value.to_s
     if attr == :wakefulness
-      publish("#{adb.serialno}/awake", (value != :asleep).to_s)
+      @homie[adb.serialno]["awake"].value = (value != :asleep).to_s
     end
-  end
-
-  def subscribe(topic)
-    @mqtt.subscribe("#{@base_topic}/#{topic}")
-  end
-
-  def unsubscribe(topic)
-    @mqtt.unsubscribe("#{@base_topic}/#{topic}")
-  end
-
-  def publish_basic_attributes
-    publish("$homie", "4.0.0")
-    publish("$name", "ADB")
-    publish("$state", "init")
-
-    publish("bridge/$name", "Bridge")
-    publish("bridge/$type", "Bridge")
-    publish("bridge/$properties", "discover")
-
-    publish("bridge/discovery/$name", "Auto-Discovery Interval")
-    publish("bridge/discovery/$datatype", "integer")
-    publish("bridge/discovery/$settable", "true")
-    publish("bridge/discovery/$format", "0:86400")
-    publish("bridge/discovery/$unit", "s")
-    subscribe("bridge/discovery")
-    subscribe("bridge/discovery/set")
-
-    subscribe("+/keyevent/set")
-    subscribe("+/wakefulness/set")
-    subscribe("+/awake/set")
   end
 
   def publish_adb(adb)
-    publish("#{adb.serialno}/$name", adb.device_name)
-    publish("#{adb.serialno}/$type", adb.class.name.split('::').last)
-    properties = []
+    @homie.node(adb.serialno, adb.device_name, adb.class.name.split('::').last) do |node|
+      node.property("event", "Incoming stream of key events", :string, retained: false)
+      node.property("keyevent", "Send a key event", :string, retained: false) do |value|
+        adb.keyevent(value)
+      end
+      node.property("foreground-app-package", "Foreground App Package", :string)
+      node.property("foreground-app", "Foreground App Display Name", :string)
+      node.property("current-window", "Current window of the foreground app", :string)
+      node.property("playback-state", "Current playback state", :enum, format: ADB::Device::PLAYBACK_STATES.values)
+      node.property("playback-position", "Current playback position", :float, unit: 's')
+      node.property('playback-duration', 'Total duration of current track', :float, unit: 's')
+      node.property("playback-speed", "Current playback speed", :float, unit: "%")
+      node.property("playback-actions", "Valid actions for current media session", :string)
+      node.property('playback-title', 'Current media item title', :string)
+      node.property('playback-album', 'Current song album', :string)
+      node.property('playback-artist', 'Current media item artist', :string)
+      node.property('playback-track', 'Current song track', :integer)
+      node.property('playback-track-count', "Current album's track count", :integer)
 
-    properties << 'event'
-    publish("#{adb.serialno}/event/$name", "Incoming stream of key events")
-    publish("#{adb.serialno}/event/$datatype", "string")
-    publish("#{adb.serialno}/event/$retained", "false")
-
-    properties << 'keyevent'
-    publish("#{adb.serialno}/keyevent/$name", "Send a key event")
-    publish("#{adb.serialno}/keyevent/$datatype", "string")
-    publish("#{adb.serialno}/keyevent/$retained", "false")
-    publish("#{adb.serialno}/keyevent/$settable", "true")
-
-    properties << 'foreground-app-package'
-    publish("#{adb.serialno}/foreground-app-package/$name", "Foreground App Package")
-    publish("#{adb.serialno}/foreground-app-package/$datatype", "string")
-
-    properties << 'foreground-app'
-    publish("#{adb.serialno}/foreground-app/$name", "Foreground App Display Name")
-    publish("#{adb.serialno}/foreground-app/$datatype", "string")
-    
-    properties << 'current-window'
-    publish("#{adb.serialno}/current-window/$name", "Current window of the foreground app")
-    publish("#{adb.serialno}/current-window/$datatype", "string")
-
-    properties << 'playback-state'
-    publish("#{adb.serialno}/playback-state/$name", "Current playback state")
-    publish("#{adb.serialno}/playback-state/$datatype", "enum")
-    publish("#{adb.serialno}/playback-state/$format", ADB::Device::PLAYBACK_STATES.values.join(","))
-
-    properties << 'playback-position'
-    publish("#{adb.serialno}/playback-position/$name", "Current playback position")
-    publish("#{adb.serialno}/playback-position/$datatype", "float")
-    publish("#{adb.serialno}/playback-position/$unit", "s")
-
-    properties << 'playback-duration'
-    publish("#{adb.serialno}/playback-duration/$name", "Total duration of current track")
-    publish("#{adb.serialno}/playback-duration/$datatype", "float")
-    publish("#{adb.serialno}/playback-duration/$unit", "s")
-
-    properties << 'playback-speed'
-    publish("#{adb.serialno}/playback-speed/$name", "Current playback speed")
-    publish("#{adb.serialno}/playback-speed/$datatype", "float")
-
-    properties << 'playback-actions'
-    publish("#{adb.serialno}/playback-actions/$name", "Valid actions for current media session")
-    publish("#{adb.serialno}/playback-actions/$datatype", "string")
-
-    properties << 'playback-title'
-    publish("#{adb.serialno}/playback-title/$name", "Current media item title")
-    publish("#{adb.serialno}/playback-title/$datatype", "string")
-
-    properties << 'playback-album'
-    publish("#{adb.serialno}/playback-album/$name", "Current song album")
-    publish("#{adb.serialno}/playback-album/$datatype", "string")
-
-    properties << 'playback-artist'
-    publish("#{adb.serialno}/playback-artist/$name", "Current media item artist")
-    publish("#{adb.serialno}/playback-artist/$datatype", "string")
-
-    properties << 'playback-track'
-    publish("#{adb.serialno}/playback-track/$name", "Current song track")
-    publish("#{adb.serialno}/playback-track/$datatype", "integer")
-
-    properties << 'playback-track-count'
-    publish("#{adb.serialno}/playback-track-count/$name", "Current album's track count")
-    publish("#{adb.serialno}/playback-track-count/$datatype", "integer")
-
-    if adb.respond_to?(:wakefulness)
-      properties << 'wakefulness'
-      publish("#{adb.serialno}/wakefulness/$name", "Wakefulness")
-      publish("#{adb.serialno}/wakefulness/$datatype", "enum")
-      publish("#{adb.serialno}/wakefulness/$settable", "true")
-      publish("#{adb.serialno}/wakefulness/$format", "awake,asleep,dreaming")
-
-      properties << 'awake'
-      publish("#{adb.serialno}/awake/$name", "Awake")
-      publish("#{adb.serialno}/awake/$datatype", "boolean")
-      publish("#{adb.serialno}/awake/$settable", "true")
+      if adb.respond_to?(:wakefulness)
+        node.property("wakefulness", "Wakefulness", :enum, format: %w[awake asleep dreaming]) do |value|
+          adb.wake_up if value == 'awake'
+          adb.sleep if value == 'sleep'
+        end
+        node.property("awake", "Awake", :boolean) do |value|
+          value ? adb.wake_up : adb.sleep
+        end
+      end
     end
-
-    publish("#{adb.serialno}/$properties", properties.join(","))
   end
 end
 
