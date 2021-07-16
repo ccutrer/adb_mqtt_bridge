@@ -11,7 +11,11 @@ module ADB
     class << self
       def devices
         lines = `adb devices -l`.split("\n")
-        raise "could not get device list" unless $?.success?
+        unless $?.success?
+          STDERR.puts "could not get device list"
+          STDERR.puts lines
+          return []
+        end
 
         # first line is header
         lines.shift
