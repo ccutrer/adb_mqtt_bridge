@@ -10,7 +10,7 @@ class MQTTBridge
   def initialize(mqtt_uri, devices: [])
     @base_topic = "homie/adb"
     @mqtt = MQTT::Client.new(mqtt_uri)
-    @mqtt.set_will("#{@base_topic}/$state", "lost", true)
+    @mqtt.set_will("#{@base_topic}/$state", "lost", retain: true, qos: 1)
     @mqtt.connect
     @discovery_mutex = Mutex.new
     @explicit_devices = devices
@@ -25,7 +25,8 @@ class MQTTBridge
     start_discovery_thread
     start_reconnect_thread
 
-    @mqtt.get do |topic, value|
+    @mqtt.get do |packet|
+      topic, value = packet.topic, packet.payload
       puts "got #{value.inspect} at #{topic}"
       topic = topic[(@base_topic.length + 1)..-1]
 
@@ -172,7 +173,7 @@ class MQTTBridge
   end
 
   def publish(topic, value)
-    @mqtt.publish("#{@base_topic}/#{topic}", value, true, 1)
+    @mqtt.publish("#{@base_topic}/#{topic}", value, retain: true, qos: 1)
   end
 
   def update_attribute(adb, attr, value)

@@ -13,7 +13,7 @@ Gem::Specification.new do |s|
   s.executables = ['adb_mqtt_bridge']
   s.files = Dir["{bin,lib}/**/*"]
 
-  s.add_dependency 'mqtt', "~> 0.5.0"
+  s.add_dependency 'mqtt-ccutrer', "~> 1.0"
   s.add_dependency 'dnssd', "~> 3.0"
   s.add_dependency 'slop', "~> 4.8"
 
