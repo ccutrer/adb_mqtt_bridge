@@ -56,6 +56,12 @@ class MQTTBridge
 
     @homie.publish
 
+    Signal.trap("INT") do
+      exit! 1
+    end
+    Signal.trap("TERM") do
+      exit! 1
+    end
 
     @homie.join
   end
