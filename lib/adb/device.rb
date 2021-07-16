@@ -32,7 +32,7 @@ module ADB
       def create(device_attrs, cb = nil)
         puts "connecting to #{device_attrs.inspect}"
         klass = case device_attrs[:product]
-        when 'darcy', 'sif'; SHIELD
+        when 'darcy', 'mdarcy', 'sif'; SHIELD
         else; self
         end
 
@@ -41,7 +41,7 @@ module ADB
     end
 
     PLAYBACK_STATES = {
-      0 => nil,
+      0 => :unknown,
       1 => :stopped,
       2 => :paused,
       3 => :playing,
@@ -165,7 +165,7 @@ module ADB
         end
         update_attribute(:playback_actions, actions)
       else
-        update_attribute(:playback_state, '')
+        update_attribute(:playback_state, 'unknown')
         update_attribute(:playback_position, '')
         update_attribute(:playback_speed, '')
         update_attribute(:playback_actions, [])

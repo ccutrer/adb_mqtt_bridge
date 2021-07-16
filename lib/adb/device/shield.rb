@@ -11,11 +11,11 @@ module ADB
       end
 
       def wake_up
-        @adb.puts("dumpsys power | grep mWakefulness=Asleep > /dev/null && input keyevent KEYCODE_POWER")
+        @shell.puts("dumpsys power | grep mWakefulness=Asleep > /dev/null && input keyevent KEYCODE_POWER")
       end
 
       def sleep
-        @adb.puts("dumpsys power | grep mWakefulness=Asleep > /dev/null || input keyevent KEYCODE_POWER")
+        @shell.puts("dumpsys power | grep mWakefulness=Asleep > /dev/null || input keyevent KEYCODE_POWER")
       end
     end
   end
