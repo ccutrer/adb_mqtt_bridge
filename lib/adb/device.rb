@@ -181,7 +181,7 @@ module ADB
     # see https://developer.android.com/reference/android/view/KeyEvent
     def keyevent(key)
       key = "KEYCODE_#{key.upcase}" if key.is_a?(Symbol)
-      @sehll.puts("input keyevent #{key}")
+      @shell.puts("input keyevent #{key}")
     end
 
     SENTINEL = "COMMAND COMPLETE"
