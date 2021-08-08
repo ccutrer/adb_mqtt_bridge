@@ -118,7 +118,9 @@ module ADB
         playback_state = system("dumpsys media_session | grep -A9 #{escaped_package}").
           match(/PlaybackState {(.+)}/)&.[](1)
 
-        update_attribute(:foreground_app, info.match(/MediaPlayerInfo #{Regexp.escape(foreground_app_package)} \(as '(.+)'\) Type = /)&.[](1) || '')
+        foreground_app = info.match(/MediaPlayerInfo #{Regexp.escape(foreground_app_package)} \(as '(.+)'\) Type = /)&.[](1) || ''
+        foreground_app = 'Home Screen' if foreground_app.empty? && foreground_app_package == 'com.google.android.tvlauncher'
+        update_attribute(:foreground_app, foreground_app)
       else
         update_attribute(:foreground_app, '')
       end
