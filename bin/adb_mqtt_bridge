@@ -14,7 +14,7 @@ class MQTTBridge
 
     @homie = MQTT::Homie::Device.new(id, "ADB", mqtt: @mqtt, clear_topics: false)
 
-    discovery_topic = "#{@homie.topic}/bridge/discover"
+    discovery_topic = "#{@homie.topic}/bridge/discovery"
     @mqtt.subscribe(discovery_topic)
     @mqtt.unsubscribe(discovery_topic, wait_for_ack: true)
     while !@mqtt.queue_empty?
@@ -22,7 +22,7 @@ class MQTTBridge
       next unless packet.topic == discovery_topic
       next unless packet.payload =~ /^\d+$/
 
-      discover = packet.payload.to_i
+      discovery = packet.payload.to_i
       next if discovery > 86400
       @discovery = discovery
     end
