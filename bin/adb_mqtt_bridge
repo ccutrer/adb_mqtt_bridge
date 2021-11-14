@@ -149,6 +149,12 @@ class MQTTBridge
           adb.getevents do |key, action|
             node['event'].value = "#{key} #{action}"
           end
+        ensure
+          @discovery_mutex.synchronize do
+            @adbs.delete(adb.serialno)
+            @ignored_adbs = Set.new
+            @homie.remove_node(adb.serialno)
+          end
         end
 
         true
