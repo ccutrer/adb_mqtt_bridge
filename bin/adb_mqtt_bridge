@@ -83,7 +83,7 @@ class MQTTBridge
     @reconnect_thread = Thread.new do
       ADB::Discovery.discover do |serial, addr|
         unless @adbs.key?(serial)
-          system("adb connect #{Shellwords.escape(addr)}")
+          system("adb connect #{Shellwords.escape(addr)}:5555")
           discover
         end
       end
@@ -98,7 +98,7 @@ class MQTTBridge
       next if known_devices.any? do |adb_serial|
         addr == adb_serial || (!addr.include?(':') && "#{addr}:5555" == adb_serial)
       end
-      system("adb connect #{Shellwords.escape(addr)}")
+      system("adb connect #{Shellwords.escape(addr)}:5555")
     end
   end
 

@@ -248,6 +248,8 @@ module ADB
         fields << field.split(':', 2)
       end
       @device_name = fields.to_h['value']
+    rescue EOFError
+      raise DeviceNotFound
     end
 
     def update_attribute(attribute, value)
