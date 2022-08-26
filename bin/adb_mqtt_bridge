@@ -172,6 +172,7 @@ class MQTTBridge
 
   def publish_adb(adb)
     @homie.node(adb.serialno, adb.device_name, adb.class.name.split('::').last) do |node|
+      node.property("key", "Transport key", :string, adb.key)
       node.property("event", "Incoming stream of key events", :string, retained: false)
       node.property("keyevent", "Send a key event", :string, retained: false) do |value|
         adb.keyevent(value)

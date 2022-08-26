@@ -59,7 +59,7 @@ module ADB
       11 => :skipping_to_queue_item,
     }.freeze
 
-    attr_reader :device_attrs
+    attr_reader :device_attrs, :key
     attr_reader :serialno,
       :device_name,
       :foreground_app_package,
