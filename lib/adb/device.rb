@@ -107,18 +107,18 @@ module ADB
     end
 
     def update
-      system("dumpsys window windows | grep mCurrentFocus=") =~
-        /^  mCurrentFocus=Window{[0-9a-f]+ u0 ([a-zA-Z0-9.]+)\/([a-zA-Z0-9.]+)}\n$/
+      system("dumpsys window windows | grep mInputMethodInputTarget") =~
+        /^  mInputMethodInputTarget in display# 0 Window{[0-9a-f]+ u0 ([a-zA-Z0-9.]+)\/([a-zA-Z0-9.]+)}\n$/
       update_attribute(:foreground_app_package, $1)
       update_attribute(:current_window, $2)
 
       if foreground_app_package
         escaped_package = Shellwords.escape(Regexp.escape(foreground_app_package))
         info = system("dumpsys bluetooth_manager | grep -A3 #{escaped_package}")
-        playback_state = system("dumpsys media_session | grep -A9 #{escaped_package}").
-          match(/PlaybackState {(.+)}/)&.[](1)
+        media_session = system("dumpsys media_session | grep -A9 #{escaped_package}")
+        playback_state = media_session.match(/PlaybackState {(.+)}/)&.[](1)
 
-        foreground_app = info.match(/MediaPlayerInfo #{Regexp.escape(foreground_app_package)} \(as '(.+)'\) Type = /)&.[](1) || ''
+        foreground_app = media_session.match(/media session #{Regexp.escape(foreground_app_package)}\/(.+) media session/)&.[](1) || ''
         foreground_app = 'Home Screen' if foreground_app.empty? && foreground_app_package == 'com.google.android.tvlauncher'
         update_attribute(:foreground_app, foreground_app)
       else
@@ -138,12 +138,12 @@ module ADB
         update_attribute(:playback_track, track)
         update_attribute(:playback_track_count, track_count)
       else
-        update_attribute(:playback_duration, '')
+        update_attribute(:playback_duration, 0.0)
         update_attribute(:playback_title, '')
         update_attribute(:playback_artist, '')
         update_attribute(:playback_album, '')
-        update_attribute(:playback_track, '')
-        update_attribute(:playback_track_count, '')
+        update_attribute(:playback_track, 0)
+        update_attribute(:playback_track_count, 0)
       end
 
       if playback_state
@@ -172,8 +172,8 @@ module ADB
         update_attribute(:playback_actions, actions)
       else
         update_attribute(:playback_state, 'unknown')
-        update_attribute(:playback_position, '')
-        update_attribute(:playback_speed, '')
+        update_attribute(:playback_position, 0.0)
+        update_attribute(:playback_speed, 0.0)
         update_attribute(:playback_actions, [])
       end
 
